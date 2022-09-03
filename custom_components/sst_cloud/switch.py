@@ -5,6 +5,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from . import sst
 from .const import DOMAIN
 import logging
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -17,7 +18,9 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
             new_devices.append(WaterSwitchSecondGroup(module))
         if module.get_device_type == 2:
             new_devices.append(WaterSwitch(module))
-        new_devices.append((Washing_floors_mode(module)))
+            new_devices.append((Washing_floors_mode(module)))
+        if module.get_device_type == 1:
+            new_devices.append((ThermostateSwitch(module)))
     async_add_entities(new_devices)
 
 
@@ -94,6 +97,7 @@ class WaterSwitchSecondGroup(SwitchEntity):
     def icon(self):
         return "mdi:pipe-valve"
 
+
 class WaterSwitch(SwitchEntity):
     def __init__(self, module: sst.NeptunProwWiFi):
         self._module = module
@@ -166,3 +170,39 @@ class Washing_floors_mode(SwitchEntity):
     @property
     def icon(self):
         return "mdi:pail"
+
+
+class ThermostateSwitch(SwitchEntity):
+    def __init__(self, module: sst.ThermostatMCS350):
+        self._module = module
+        self._attr_unique_id = f"{self._module.get_device_id}_ThermostateSwitch"
+        if self._module._relay_status == "on":
+            self._is_on = True
+        else:
+            self._is_on = False
+
+    @property
+    def name(self):
+        return f"ThermostatSwitch {self._module._name}"
+
+    @property
+    def is_on(self):
+        if self._module._relay_status == "on":
+            self._is_on = True
+        else:
+            self._is_on = False
+        return self._is_on
+
+    def turn_on(self, **kwargs):
+        self._module.set_status_on()
+
+    def turn_off(self, **kwargs):
+        self._module.set_status_off()
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, self._module.get_device_id)}}
+
+    @property
+    def icon(self):
+        return "mdi:pipe-valve"

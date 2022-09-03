@@ -7,37 +7,54 @@ from homeassistant.core import HomeAssistant
 SST_CLOUD_API_URL = "https://api.sst-cloud.com/"
 _LOGGER = logging.getLogger(__name__)
 
-class SST:
 
+class SST:
     def __init__(self, hass: HomeAssistant, username: str, password: str) -> None:
         self._username = username
         self._password = password
         self.devices = []
 
-
     def pull_data(self):
-        response = requests.post(SST_CLOUD_API_URL + "auth/login/",
-                                 json={"username": self._username, "password": self._password, "email": self._username},
-                                 headers={'Content-Type': 'application/json'})
+        response = requests.post(
+            SST_CLOUD_API_URL + "auth/login/",
+            json={
+                "username": self._username,
+                "password": self._password,
+                "email": self._username,
+            },
+            headers={"Content-Type": "application/json"},
+        )
         self.key = json.loads(response.text)["key"]
-        response = requests.get(SST_CLOUD_API_URL + "houses", headers={"Authorization": "Token " + self.key})
+        response = requests.get(
+            SST_CLOUD_API_URL + "houses", headers={"Authorization": "Token " + self.key}
+        )
         houses = json.loads(response.text)
         for house in houses:  # перебираем все дома
-            response = requests.get(SST_CLOUD_API_URL +
-                                    "houses/" + str(house["id"]) + "/devices",
-                                    headers={"Authorization": "Token " + self.key})
+            response = requests.get(
+                SST_CLOUD_API_URL + "houses/" + str(house["id"]) + "/devices",
+                headers={"Authorization": "Token " + self.key},
+            )
             devices = json.loads(response.text)
             # Перебираем все устройства в доме
             for device in devices:
-                response = requests.get(SST_CLOUD_API_URL +
-                                        "houses/" + str(house["id"]) + "/devices/" + str(device["id"]),
-                                        headers={"Authorization": "Token " + self.key})
+                response = requests.get(
+                    SST_CLOUD_API_URL
+                    + "houses/"
+                    + str(house["id"])
+                    + "/devices/"
+                    + str(device["id"]),
+                    headers={"Authorization": "Token " + self.key},
+                )
                 json_device = json.loads(response.text)
                 if json_device["type"] == 7:
                     self.devices.append(LeakModule(json_device, self))
                 if json_device["type"] == 2:
                     self.devices.append(NeptunProwWiFi(json_device, self))
-#Neptun ProW+ WiFi
+                if json_device["type"] == 1:
+                    self.devices.append(ThermostatMCS350(json_device, self))
+
+
+# Neptun ProW+ WiFi
 class NeptunProwWiFi:
     def __init__(self, moduleDescription: json, sst: SST):
         self._sst = sst
@@ -45,124 +62,187 @@ class NeptunProwWiFi:
         self._access_status = config["access_status"]  # Main device "available" is true
         self._device_name = moduleDescription["name"]
         self._house_id = moduleDescription["house"]
-        self._type = moduleDescription["type"] #2
+        self._type = moduleDescription["type"]  # 2
         self._id = moduleDescription["id"]
         self._valves_state = config["settings"]["valve_settings"]
         self.alert_status = config["settings"]["status"]["alert"]
         self._dry_flag = config["settings"]["dry_flag"]
         self.counters = []
-        response = requests.get(SST_CLOUD_API_URL +
-                                "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/counters",
-                                headers={"Authorization": "Token " + self._sst.key})
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/counters",
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         countersJson = json.loads(response.text)
         for counterDesc in countersJson:
-            self.counters.append(Counter(counterDesc["id"], counterDesc["name"], counterDesc["value"]))
+            self.counters.append(
+                Counter(counterDesc["id"], counterDesc["name"], counterDesc["value"])
+            )
         self.leakSensors = []
         # Перебрать статус всех проводных датчиков протечки
         i = 0
         for leakSensorDesc in config["lines_status"]:
             self.leakSensors.append(
-                LeakSensor(leakSensorDesc, config["lines_status"][leakSensorDesc],moduleDescription["line_names"][i]))
+                LeakSensor(
+                    leakSensorDesc,
+                    config["lines_status"][leakSensorDesc],
+                    moduleDescription["line_names"][i],
+                )
+            )
             i = i + 1
         self.wirelessLeakSensors = []
-        response = requests.get(SST_CLOUD_API_URL +
-                                "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/wireless_sensors",
-                                headers={"Authorization": "Token " + self._sst.key})
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/wireless_sensors",
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         wirelessSensors = json.loads(response.text)
         # Перебираем все беспроводные датчики
         for wirelessSensorDesc in wirelessSensors:
             self.wirelessLeakSensors.append(WirelessLeakSensor443(wirelessSensorDesc))
 
     def close_valve(self):
-            requests.post(SST_CLOUD_API_URL +
-                           "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/valve_settings/",
-                           json={"valve_settings":"closed"},
-                           headers={"Authorization": "Token " + self._sst.key})
-            self._valves_state = "closed"
+        requests.post(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/valve_settings/",
+            json={"valve_settings": "closed"},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        self._valves_state = "closed"
 
     def open_valve(self):
-            requests.post(SST_CLOUD_API_URL +
-                           "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/valve_settings/",
-                           json={"valve_settings":"opened"},
-                           headers={"Authorization": "Token " + self._sst.key})
-            self._valves_state = "opened"
-    def set_on_washing_floors_mode(self):
-        requests.post(SST_CLOUD_API_URL +
-                       "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/dry_flag/",
-                       json={"dry_flag":"on"},
-                       headers={"Authorization": "Token " + self._sst.key})
-        self._dry_flag = "on"
-    def set_off_washing_floors_mode(self):
-        requests.post(SST_CLOUD_API_URL +
-                       "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/dry_flag/",
-                       json={"dry_flag": "off"},
-                       headers={"Authorization": "Token " + self._sst.key})
-        self._dry_flag = "off"
+        requests.post(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/valve_settings/",
+            json={"valve_settings": "opened"},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        self._valves_state = "opened"
 
+    def set_on_washing_floors_mode(self):
+        requests.post(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/dry_flag/",
+            json={"dry_flag": "on"},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        self._dry_flag = "on"
+
+    def set_off_washing_floors_mode(self):
+        requests.post(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/dry_flag/",
+            json={"dry_flag": "off"},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        self._dry_flag = "off"
 
     @property
     def get_avalible_status(self) -> bool:
-            if self._access_status == "available":
-                return "true"
-            else:
-                return "false"
+        if self._access_status == "available":
+            return "true"
+        else:
+            return "false"
 
     @property
     def get_device_id(self) -> str:
-            return self._id
+        return self._id
 
     @property
     def get_device_name(self) -> str:
-            return self._device_name
+        return self._device_name
 
     @property
     def get_device_type(self) -> int:
-            return self._type
+        return self._type
 
     @property
     def get_valves_state(self) -> str:
-            # opened or closed
-            return self._valves_state
+        # opened or closed
+        return self._valves_state
+
     @property
-    def get_washing_floors_mode(self)-> str:
+    def get_washing_floors_mode(self) -> str:
         return self._dry_flag
 
     def update(self) -> None:
-            # Обновляем парметры модуля
-            response = requests.get(SST_CLOUD_API_URL +
-                                    "houses/" + str(self._house_id) + "/devices/" + str(self._id),
-                                    headers={"Authorization": "Token " + self._sst.key})
-            json_device = json.loads(response.text)
-            config = json.loads(json_device["parsed_configuration"])
-            self._access_status = config["access_status"]  # Main device "available" is true
-            self._device_name = json_device["name"]
-            self._house_id = json_device["house"]
-            self._type = json_device["type"]
-            self._id = json_device["id"]
-            self._valves_state = config["settings"]["valve_settings"]
-            self.alert_status = config["settings"]["status"]["alert"]
-            self._dry_flag = config["settings"]["dry_flag"]
-            # Обновляем статус счетчиков
-            response = requests.get(SST_CLOUD_API_URL +
-                                    "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/counters",
-                                    headers={"Authorization": "Token " + self._sst.key})
-            countersJson = json.loads(response.text)
-            for counter in self.counters:
-                counter.update(countersJson)
+        # Обновляем парметры модуля
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id),
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        json_device = json.loads(response.text)
+        config = json.loads(json_device["parsed_configuration"])
+        self._access_status = config["access_status"]  # Main device "available" is true
+        self._device_name = json_device["name"]
+        self._house_id = json_device["house"]
+        self._type = json_device["type"]
+        self._id = json_device["id"]
+        self._valves_state = config["settings"]["valve_settings"]
+        self.alert_status = config["settings"]["status"]["alert"]
+        self._dry_flag = config["settings"]["dry_flag"]
+        # Обновляем статус счетчиков
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/counters",
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        countersJson = json.loads(response.text)
+        for counter in self.counters:
+            counter.update(countersJson)
 
-            # Обновляем статус датчиков
-            for leakSensor in self.leakSensors:
-                leakSensor.update(config["lines_status"])
-            # Обновляем статус беспроводных датчиков
-            response = requests.get(SST_CLOUD_API_URL +
-                                    "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/wireless_sensors",
-                                    headers={"Authorization": "Token " + self._sst.key})
-            # print(response.text)
-            wirelessSensorsJson = json.loads(response.text)
-            for wirelessSensor in self.wirelessLeakSensors:
-                wirelessSensor.update(wirelessSensorsJson)
+        # Обновляем статус датчиков
+        for leakSensor in self.leakSensors:
+            leakSensor.update(config["lines_status"])
+        # Обновляем статус беспроводных датчиков
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/wireless_sensors",
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        # print(response.text)
+        wirelessSensorsJson = json.loads(response.text)
+        for wirelessSensor in self.wirelessLeakSensors:
+            wirelessSensor.update(wirelessSensorsJson)
 
-#Neptun Smart
+
+# Neptun Smart
 class LeakModule:
     def __init__(self, moduleDescription: json, sst: SST):
         self._sst = sst
@@ -171,78 +251,143 @@ class LeakModule:
         self._device_id = config["device_id"]
         self._device_name = moduleDescription["name"]
         self._house_id = moduleDescription["house"]
-        self._type = moduleDescription["type"] #7
+        self._type = moduleDescription["type"]  # 7
         self._id = moduleDescription["id"]
-        self._first_group_valves_state = config["module_settings"]["module_config"]["first_group_valves_state"]
-        self._second_group_valves_state = config["module_settings"]["module_config"]["second_group_valves_state"]
-        self.first_group_alarm = config["module_settings"]["module_status"]["first_group_alarm"]
-        self.second_group_alarm = config["module_settings"]["module_status"]["second_group_alarm"]
-        self._washing_floors_mode = config["module_settings"]["module_status"]["washing_floors_mode"]
+        self._first_group_valves_state = config["module_settings"]["module_config"][
+            "first_group_valves_state"
+        ]
+        self._second_group_valves_state = config["module_settings"]["module_config"][
+            "second_group_valves_state"
+        ]
+        self.first_group_alarm = config["module_settings"]["module_status"][
+            "first_group_alarm"
+        ]
+        self.second_group_alarm = config["module_settings"]["module_status"][
+            "second_group_alarm"
+        ]
+        self._washing_floors_mode = config["module_settings"]["module_status"][
+            "washing_floors_mode"
+        ]
         self.counters = []
-        response = requests.get(SST_CLOUD_API_URL +
-                                "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/counters",
-                                headers={"Authorization": "Token " + self._sst.key})
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/counters",
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         countersJson = json.loads(response.text)
         for counterDesc in countersJson:
-            self.counters.append(Counter(counterDesc["id"], counterDesc["name"], counterDesc["value"]))
+            self.counters.append(
+                Counter(counterDesc["id"], counterDesc["name"], counterDesc["value"])
+            )
 
         self.leakSensors = []
         # Перебрать статус всех проводных датчиков протечки
-        i=0
+        i = 0
         for leakSensorDesc in config["module_settings"]["wire_lines_status"]:
             self.leakSensors.append(
-                LeakSensor(leakSensorDesc, config["module_settings"]["wire_lines_status"][leakSensorDesc],moduleDescription["line_names"][i]))
-            i=i+1
+                LeakSensor(
+                    leakSensorDesc,
+                    config["module_settings"]["wire_lines_status"][leakSensorDesc],
+                    moduleDescription["line_names"][i],
+                )
+            )
+            i = i + 1
         self.wirelessLeakSensors = []
-        response = requests.get(SST_CLOUD_API_URL +
-                                "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/wireless_sensors",
-                                headers={"Authorization": "Token " + self._sst.key})
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/wireless_sensors",
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         wirelessSensors = json.loads(response.text)
         # Перебираем все беспроводные датчики
         for wirelessSensorDesc in wirelessSensors:
             self.wirelessLeakSensors.append(WirelessLeakSensor(wirelessSensorDesc))
 
     def close_valve_first_group(self):
-        requests.patch(SST_CLOUD_API_URL +
-                       "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/module_settings/",
-                       json={"module_config": {"first_group_valves_state": "closed"}},
-                       headers={"Authorization": "Token " + self._sst.key})
+        requests.patch(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/module_settings/",
+            json={"module_config": {"first_group_valves_state": "closed"}},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         self._first_group_valves_state = "closed"
 
     def open_valve_first_group(self):
-        requests.patch(SST_CLOUD_API_URL +
-                       "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/module_settings/",
-                       json={"module_config": {"first_group_valves_state": "opened"}},
-                       headers={"Authorization": "Token " + self._sst.key})
+        requests.patch(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/module_settings/",
+            json={"module_config": {"first_group_valves_state": "opened"}},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         self._first_group_valves_state = "opened"
 
     def close_valve_second_group(self):
-        requests.patch(SST_CLOUD_API_URL +
-                       "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/module_settings/",
-                       json={"module_config": {"second_group_valves_state": "closed"}},
-                       headers={"Authorization": "Token " + self._sst.key})
+        requests.patch(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/module_settings/",
+            json={"module_config": {"second_group_valves_state": "closed"}},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         self._second_group_valves_state = "closed"
 
     def open_valve_second_group(self):
-        requests.patch(SST_CLOUD_API_URL +
-                       "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/module_settings/",
-                       json={"module_config": {"second_group_valves_state": "opened"}},
-                       headers={"Authorization": "Token " + self._sst.key})
+        requests.patch(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/module_settings/",
+            json={"module_config": {"second_group_valves_state": "opened"}},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         self._second_group_valves_state = "opened"
 
     def set_on_washing_floors_mode(self):
-        requests.patch(SST_CLOUD_API_URL +
-                       "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/module_settings/",
-                       json={"washing_floors_mode":"on"},
-                       headers={"Authorization": "Token " + self._sst.key})
+        requests.patch(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/module_settings/",
+            json={"washing_floors_mode": "on"},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         self._washing_floors_mode = "on"
-    def set_off_washing_floors_mode(self):
-        requests.patch(SST_CLOUD_API_URL +
-                       "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/module_settings/",
-                       json={"washing_floors_mode": "off"},
-                       headers={"Authorization": "Token " + self._sst.key})
-        self._washing_floors_mode = "off"
 
+    def set_off_washing_floors_mode(self):
+        requests.patch(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/module_settings/",
+            json={"washing_floors_mode": "off"},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        self._washing_floors_mode = "off"
 
     @property
     def get_avalible_status(self) -> bool:
@@ -274,14 +419,19 @@ class LeakModule:
         return self._second_group_valves_state
 
     @property
-    def get_washing_floors_mode(self)-> str:
+    def get_washing_floors_mode(self) -> str:
         return self._washing_floors_mode
 
     def update(self) -> None:
         # Обновляем парметры модуля
-        response = requests.get(SST_CLOUD_API_URL +
-                                "houses/" + str(self._house_id) + "/devices/" + str(self._id),
-                                headers={"Authorization": "Token " + self._sst.key})
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id),
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         json_device = json.loads(response.text)
         config = json.loads(json_device["parsed_configuration"])
         self._access_status = config["access_status"]  # Main device "available" is true
@@ -290,15 +440,31 @@ class LeakModule:
         self._house_id = json_device["house"]
         self._type = json_device["type"]
         self._id = json_device["id"]
-        self._first_group_valves_state = config["module_settings"]["module_config"]["first_group_valves_state"]
-        self._second_group_valves_state = config["module_settings"]["module_config"]["second_group_valves_state"]
-        self.first_group_alarm = config["module_settings"]["module_status"]["first_group_alarm"]
-        self.second_group_alarm = config["module_settings"]["module_status"]["second_group_alarm"]
-        self._washing_floors_mode = config["module_settings"]["module_status"]["washing_floors_mode"]
+        self._first_group_valves_state = config["module_settings"]["module_config"][
+            "first_group_valves_state"
+        ]
+        self._second_group_valves_state = config["module_settings"]["module_config"][
+            "second_group_valves_state"
+        ]
+        self.first_group_alarm = config["module_settings"]["module_status"][
+            "first_group_alarm"
+        ]
+        self.second_group_alarm = config["module_settings"]["module_status"][
+            "second_group_alarm"
+        ]
+        self._washing_floors_mode = config["module_settings"]["module_status"][
+            "washing_floors_mode"
+        ]
         # Обновляем статус счетчиков
-        response = requests.get(SST_CLOUD_API_URL +
-                                "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/counters",
-                                headers={"Authorization": "Token " + self._sst.key})
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/counters",
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         countersJson = json.loads(response.text)
         for counter in self.counters:
             counter.update(countersJson)
@@ -307,9 +473,15 @@ class LeakModule:
         for leakSensor in self.leakSensors:
             leakSensor.update(config["module_settings"]["wire_lines_status"])
         # Обновляем статус беспроводных датчиков
-        response = requests.get(SST_CLOUD_API_URL +
-                                "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/wireless_sensors",
-                                headers={"Authorization": "Token " + self._sst.key})
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/wireless_sensors",
+            headers={"Authorization": "Token " + self._sst.key},
+        )
         # print(response.text)
         wirelessSensorsJson = json.loads(response.text)
         for wirelessSensor in self.wirelessLeakSensors:
@@ -337,13 +509,14 @@ class Counter:
     def update(self, countersJson: json) -> None:
         for counterJson in countersJson:
             if self._id == counterJson["id"]:
-               self._value = counterJson["value"]
+                self._value = counterJson["value"]
 
 
 class LeakSensor:
     def __init__(self, name: str, status: str):
         self._name = name
         self._alarm = status
+
     def __init__(self, name: str, status: str, frendly_name: str):
         self._name = name
         self._alarm = status
@@ -363,6 +536,7 @@ class LeakSensor:
 
     def update(self, LeakSensorsDesc: json):
         self._alarm = LeakSensorsDesc[self._name]
+
     #  print("sensor "+ self._name +" status updated")
 
 
@@ -372,10 +546,9 @@ class WirelessLeakSensor:
         self._name = wirelessLeakSensorDescription["name"]
         self._battery_level = wirelessLeakSensorDescription["battery"]
         self._alert = wirelessLeakSensorDescription["attention"]
-        self._lost = wirelessLeakSensorDescription["sensor_lost"] #!
-        self._battery_discharge = wirelessLeakSensorDescription["battery_discharge"] #!
-        self._serial = wirelessLeakSensorDescription["serial_number"] #!
-
+        self._lost = wirelessLeakSensorDescription["sensor_lost"]  #!
+        self._battery_discharge = wirelessLeakSensorDescription["battery_discharge"]  #!
+        self._serial = wirelessLeakSensorDescription["serial_number"]  #!
 
     @property
     def get_wireless_leak_serial_number(self) -> str:
@@ -407,7 +580,7 @@ class WirelessLeakSensor:
 
     def update(self, wireless_sensor_description: str):
         for sensor_desc in wireless_sensor_description:
-            if sensor_desc["serial_number"] == self._serial:
+            if sensor_desc["name"] == self._name:
                 self._battery_level = sensor_desc["battery"]
                 self._alert = sensor_desc["attention"]
                 self._lost = sensor_desc["sensor_lost"]
@@ -421,7 +594,6 @@ class WirelessLeakSensor443:
         self._alert = wirelessLeakSensorDescription["attention"]
         self._line = wirelessLeakSensorDescription["line"]
         self._type = 443
-
 
     @property
     def get_type(self) -> int:
@@ -452,3 +624,149 @@ class WirelessLeakSensor443:
             if sensor_desc["name"] == self._name:
                 self._battery_level = sensor_desc["battery"]
                 self._alert = sensor_desc["attention"]
+
+
+# Thermostat
+class ThermostatMCS350:
+    def __init__(self, moduleDescription: json, sst: SST):
+        self._sst = sst
+        config = json.loads(moduleDescription["parsed_configuration"])
+        self._device_id = config["device_id"]  # T2319
+        self._mac_address = config["mac_address"]  # D8:A0:1D:5D:93:B4
+        self._relay_status = config["relay_status"]  # on/off
+        self._signal_level = config["signal_level"]  # 4
+        self._name = moduleDescription["name"]  # Ванна
+        self._id = moduleDescription["id"]  # 185113
+        self._house_id = moduleDescription["house"]
+        self._type = moduleDescription["type"]  # 1
+        self._is_connected = moduleDescription["is_connected"]  # true/false
+        self._power = moduleDescription["power"]  # 480 мощьность термоэлемента
+        self._power_relay_time = moduleDescription["power_relay_time"]  # 1005
+        self._chart_temperature_comfort = moduleDescription[
+            "chart_temperature_comfort"
+        ]  # 28
+        self._chart_temperature_economical = moduleDescription[
+            "chart_temperature_economical"
+        ]  # 18
+        self._mode = config["settings"]["mode"]  # manual/chart
+        self._status = config["settings"]["status"]  # on/off
+        self._max_temperature_air = config["settings"]["temperature_air"]  # 35
+        self._temperature_manual = config["settings"]["temperature_manual"]  # 20
+        self._temperature_vacation = config["settings"]["temperature_vacation"]  # 12
+        self._temperature_correction_air = config["settings"][
+            "temperature_correction_air"
+        ]  # 0
+        self._temperature_air = config["current_temperature"]["temperature_air"]
+        self._temperature_floor = config["current_temperature"][
+            "temperature_floor"
+        ]  # 27
+
+    def set_mode_manual(self):
+        requests.post(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/mode/",
+            json={"mode": "manual"},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        self._mode = "manual"
+
+    def set_mode_vacation(self):
+        requests.post(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/mode/",
+            json={"mode": "vacation"},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        self._mode = "vacation"
+
+    def set_status_off(self):
+        requests.post(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/status/",
+            json={"ststus": "off"},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        self._status = "off"
+
+    def set_status_on(self):
+        requests.post(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id)
+            + "/status/",
+            json={"ststus": "on"},
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        self._status = "on"
+
+    @property
+    def get_avalible_status(self) -> bool:
+        if self._access_status == "available":
+            return "true"
+        else:
+            return "false"
+
+    @property
+    def get_device_id(self) -> str:
+        return self._id
+
+    @property
+    def get_device_name(self) -> str:
+        return self._name
+
+    @property
+    def get_device_type(self) -> int:
+        return self._type
+
+    def update(self) -> None:
+        # Обновляем парметры модуля
+        response = requests.get(
+            SST_CLOUD_API_URL
+            + "houses/"
+            + str(self._house_id)
+            + "/devices/"
+            + str(self._id),
+            headers={"Authorization": "Token " + self._sst.key},
+        )
+        json_device = json.loads(response.text)
+        config = json.loads(json_device["parsed_configuration"])
+        self._device_id = config["device_id"]  # T2319
+        self._mac_address = config["mac_address"]  # D8:A0:1D:5D:93:B4
+        self._relay_status = config["relay_status"]  # on/off
+        self._signal_level = config["signal_level"]  # 4
+        self._name = json_device["name"]  # Ванна
+        self._id = json_device["id"]  # 185113
+        self._type = json_device["type"]  # 1
+        self._is_connected = json_device["is_connected"]  # true/false
+        self._power = json_device["power"]  # 480 мощьность термоэлемента
+        self._power_relay_time = json_device["power_relay_time"]  # 1005
+        self._chart_temperature_comfort = json_device["chart_temperature_comfort"]  # 28
+        self._chart_temperature_economical = json_device[
+            "chart_temperature_economical"
+        ]  # 18
+        self._mode = config["settings"]["mode"]  # manual/chart
+        self._status = config["settings"]["status"]  # on/off
+        self._max_temperature_air = config["settings"]["temperature_air"]  # 35
+        self._temperature_manual = config["settings"]["temperature_manual"]  # 20
+        self._temperature_vacation = config["settings"]["temperature_vacation"]  # 12
+        self._temperature_correction_air = config["settings"][
+            "temperature_correction_air"
+        ]  # 0
+        self._temperature_air = config["current_temperature"]["temperature_air"]
+        self._temperature_floor = config["current_temperature"][
+            "temperature_floor"
+        ]  # 27
