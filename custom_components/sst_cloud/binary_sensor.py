@@ -5,6 +5,7 @@ from .const import DOMAIN
 from . import sst
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
+    BinarySensorEntity,
 )
 import logging
 _LOGGER = logging.getLogger(__name__)
@@ -14,6 +15,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
     new_devices = []
     for module in sst1.devices:
+        if module.get_device_type in (1, 3, 6):
+            new_devices.append(HeaterRelayStatus(module))
         if module.get_device_type == 7 or module.get_device_type == 2 or module.get_device_type == 4:
             if module.get_device_type == 7:
                 new_devices.append(MainModule(module))
@@ -348,3 +351,23 @@ class MainModuleNeptunProw(Entity):
 
     def update(self) -> None:
         self._module.update()
+
+
+class HeaterRelayStatus(BinarySensorEntity):
+    _attr_device_class = BinarySensorDeviceClass.HEAT
+    _attr_translation_key = "heater_relay_status"
+
+    def __init__(self, module: sst.ThermostatEquation):
+        self._module = module
+        # Уникальный идентификатор
+        self._attr_unique_id = f"{self._module.get_device_id}_HeaterRelayStatus"
+        # Отображаемое имя
+        self._attr_name = "Подогрев"
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, self._module.get_device_id)}}
+
+    @property
+    def is_on(self) -> bool | None:
+        return self._module.get_relay_status

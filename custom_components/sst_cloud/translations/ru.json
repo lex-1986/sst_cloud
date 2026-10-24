@@ -1,0 +1,13 @@
+{
+    "entity": {
+        "binary_sensor": {
+            "heater_relay_status": {
+                "name": "Подогрев",
+                "state": {
+                    "on": "включен",
+                    "off": "выключен"
+                }
+            }
+        }
+    }
+}

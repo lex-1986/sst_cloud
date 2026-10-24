@@ -16,5 +16,16 @@
                 }
             }
         }
-   }
+    },
+    "entity": {
+        "binary_sensor": {
+            "heater_relay_status": {
+                "name": "Heating",
+                "state": {
+                    "on": "on",
+                    "off": "off"
+                }
+            }
+        }
+    }
 }

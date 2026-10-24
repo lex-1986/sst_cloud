@@ -4,9 +4,37 @@ import asyncio
 import logging
 import time
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 SST_CLOUD_API_URL = "https://api.sst-cloud.com/"
 _LOGGER = logging.getLogger(__name__)
+
+
+_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def chart_target_temperature(config: dict, manual: int) -> int:
+    """Температура из расписания (режим chart) на текущий момент.
+
+    Если расписания нет или оно не разобралось - возвращает ручную уставку.
+    """
+    try:
+        days = {day: points for day, points in config.get("chart", [])}
+        now = dt_util.now()
+        today = now.weekday()
+        now_time = now.strftime("%H:%M:%S")
+        points = sorted(days.get(_WEEKDAYS[today], []), key=lambda p: p["init_time"])
+        started = [p for p in points if p["init_time"] <= now_time]
+        if started:
+            return started[-1]["temperature"]
+        # до первой точки дня действует последняя точка предыдущего дня
+        for shift in range(1, 8):
+            prev = sorted(days.get(_WEEKDAYS[(today - shift) % 7], []), key=lambda p: p["init_time"])
+            if prev:
+                return prev[-1]["temperature"]
+    except (TypeError, KeyError, ValueError):
+        _LOGGER.debug("Не удалось разобрать расписание SST", exc_info=True)
+    return manual
 
 class SST:
 
@@ -155,6 +183,8 @@ class ThermostatMCS300:
 
     @property
     def get_target_floor_temperature(self) -> int:
+        if self._mode == "chart":
+            return chart_target_temperature(self.config, self._target_temperature)
         return self._target_temperature
     @property
     def get_mode(self) -> str:
@@ -271,6 +301,8 @@ class ThermostatOKE20:
 
     @property
     def get_target_floor_temperature(self) -> int:
+        if self._mode == "chart":
+            return chart_target_temperature(self.config, self._target_temperature)
         return self._target_temperature
     @property
     def get_mode(self) -> str:
@@ -295,7 +327,11 @@ class ThermostatEquation:
         self._current_temperature_floor = self.config["current_temperature"]["temperature_floor"]
         self._target_temperature = self.config["settings"]["temperature_manual"]
         self._status = self.config["settings"]["status"]
+        self._relay_status = self.config.get("relay_status")
         self._mode = self.config["settings"]["mode"]
+        self._chart_comfort = moduleDescription.get("chart_temperature_comfort")
+        self._chart_economical = moduleDescription.get("chart_temperature_economical")
+        self._power_relay_time = moduleDescription.get("power_relay_time")
         self._update_flag = True
 
     def update(self) -> None:
@@ -315,15 +351,42 @@ class ThermostatEquation:
             self._current_temperature_floor = self.config["current_temperature"]["temperature_floor"]
             self._target_temperature = self.config["settings"]["temperature_manual"]
             self._status = self.config["settings"]["status"]
+            self._relay_status = self.config.get("relay_status")
             self._mode = self.config["settings"]["mode"]
+            self._chart_comfort = moduleDescription.get("chart_temperature_comfort")
+            self._chart_economical = moduleDescription.get("chart_temperature_economical")
+            self._power_relay_time = moduleDescription.get("power_relay_time")
         self._update_flag = True
     def setTemperature(self,temp) -> None:
         self._update_flag = False
+        if self._mode == "chart":
+            self._setChartTemperature(temp)
+            return
         self._target_temperature = temp
         requests.post(SST_CLOUD_API_URL +
                       "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/temperature/",
                                                             json={"temperature_manual": temp},
                                                             headers={"Authorization": "Token " + self._sst.key})
+
+    def _setChartTemperature(self,temp) -> None:
+        # В режиме chart меняем ту температуру (комфорт/эконом), которая действует сейчас
+        current = chart_target_temperature(self.config, self._target_temperature)
+        if self._chart_economical != self._chart_comfort and current == self._chart_economical:
+            field = "chart_temperature_economical"
+            self._chart_economical = temp
+        else:
+            field = "chart_temperature_comfort"
+            self._chart_comfort = temp
+        requests.patch(SST_CLOUD_API_URL +
+                       "houses/" + str(self._house_id) + "/devices/" + str(self._id) + "/",
+                       json={field: temp},
+                       headers={"Authorization": "Token " + self._sst.key})
+        # локально обновляем точки расписания, чтобы не ждать ответа облака
+        for _, points in self.config.get("chart", []):
+            for point in points:
+                if point["temperature"] == current:
+                    point["temperature"] = temp
+
     def switchOn(self) -> None:
         self._update_flag = False
 
@@ -391,7 +454,21 @@ class ThermostatEquation:
         return self._current_temperature_air
     @property
     def get_target_floor_temperature(self) -> int:
+        if self._mode == "chart":
+            return chart_target_temperature(self.config, self._target_temperature)
         return self._target_temperature
+    @property
+    def get_relay_status(self):
+        # relay_status: "on" - ТЭН греет, "off" - не греет
+        if self._relay_status is None:
+            return None
+        return self._relay_status == "on"
+    @property
+    def get_relay_time(self):
+        try:
+            return float(self._power_relay_time)
+        except (TypeError, ValueError):
+            return None
     @property
     def get_mode(self) -> str:
         return self._mode

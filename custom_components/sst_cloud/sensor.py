@@ -1,4 +1,4 @@
-from homeassistant.const import (UnitOfVolume,PERCENTAGE,UnitOfTemperature)
+from homeassistant.const import (UnitOfVolume,PERCENTAGE,UnitOfTemperature,UnitOfTime)
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -24,6 +24,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
             for wSensor in module.wirelessLeakSensors:
                 new_devices.append(WirelessLeakSensorBattery(wSensor,module))
+        if module.get_device_type in (1, 3, 6):
+            new_devices.append(RelayTimeSensor(module))
         if module.get_device_type == 3 or module.get_device_type == 6:
             new_devices.append(FloorThemperatureSensor(module))
             new_devices.append(AirThemperatureSensor(module))
@@ -162,4 +164,32 @@ class FloorThemperatureSensor(Entity):
     @property
     def state(self):
         self._state = self._module.get_current_temperature
+        return self._state
+
+
+class RelayTimeSensor(Entity):
+    _attr_unit_of_measurement = UnitOfTime.HOURS
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+
+    def __init__(self, module:sst.ThermostatEquation):
+        self._module = module
+        # Уникальный идентификатор
+        self._attr_unique_id = f"{self._module.get_device_id}_RelayTimeSensor"
+        # Отображаемое имя
+        self._attr_name = f"RelayTimeSensor"
+        # Текущее значение
+        self._state = self._module.get_relay_time
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, self._module.get_device_id)}}
+
+    @property
+    def icon(self):
+        return "mdi:radiator"
+
+    @property
+    def state(self):
+        self._state = self._module.get_relay_time
         return self._state
